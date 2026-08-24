@@ -1,0 +1,79 @@
+services:
+  - type: web
+    name: saudi-tasi-signal-bot
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: SIGNAL_BOT_TOKEN
+        sync: false
+      - key: PROFIT_BOT_TOKEN
+        sync: false
+      - key: LOSS_BOT_TOKEN
+        sync: false
+      - key: REPORT_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: SAHMK_API_KEY
+        sync: false
+      - key: SAHMK_BASE_URL
+        value: https://api.sahmk.sa/api/v1
+      - key: PAPER_MODE
+        value: "true"
+      - key: STATE_DIR
+        value: data
+      - key: SCAN_INTERVAL_SECONDS
+        value: "3600"
+      - key: TRADE_MONITOR_QUOTES_PER_CYCLE
+        value: "1"
+      - key: MANUAL_QUOTES_PER_SIGNAL
+        value: "5"
+      - key: MARKET_CACHE_SECONDS
+        value: "3600"
+      - key: UNIVERSE_REFRESH_SECONDS
+        value: "21600"
+      - key: MIN_SCORE
+        value: "75"
+      - key: MIN_PROBABILITY
+        value: "65"
+      - key: MAX_DAILY_SIGNALS
+        value: "3"
+      - key: MAX_OPEN_TRADES
+        value: "5"
+      - key: MAX_RISK_PER_TRADE
+        value: "0.01"
+      - key: DATA_MAX_DELAY_MINUTES
+        value: "30"
+      - key: MIN_RR
+        value: "1.5"
+      - key: TP1_PERCENT
+        value: "30"
+      - key: TP2_PERCENT
+        value: "30"
+      - key: TP3_PERCENT
+        value: "40"
+      - key: SLIPPAGE_BPS
+        value: "5"
+      - key: FEE_BPS
+        value: "15"
+      - key: ALLOW_LONG
+        value: "true"
+      - key: TRAILING_STOP_ENABLED
+        value: "false"
+      - key: TRAILING_AFTER_TP1_TO_ENTRY
+        value: "true"
+      - key: TRAILING_AFTER_TP2_ATR
+        value: "1.0"
+      - key: PROFIT_ALERT_THRESHOLDS
+        value: "2,5,10,15,20"
+      - key: NEAR_SL_WARNING_PCT
+        value: "0.5"
+      - key: WEEKLY_REPORT_ENABLED
+        value: "true"
+      - key: WEEKLY_REPORT_WEEKDAY
+        value: "3"
+      - key: WEEKLY_REPORT_HOUR
+        value: "15"
+      - key: WEEKLY_REPORT_MINUTE
+        value: "5"
