@@ -1,64 +1,73 @@
-# TASI KSA Signal Bot — Manual Signals + Paper Trading
+# TASI KSA Signal Bot — SAHMK Free + Telegram + Render
 
-مشروع Python للسوق السعودي TASI يعمل على Render مع 4 Telegram Bots وSAHMK.
+نظام Paper Trading للأسهم السعودية TASI. اكتشاف الصفقات **يدوي فقط** عبر `/signal`، ولا يوجد تنفيذ أوامر شراء أو بيع حقيقية.
 
-## الوضع التشغيلي
+## ما الذي يفعله `/signal`؟
 
-**اكتشاف الصفقات ليس تلقائيًا.**
+في وضع `SAHMK_PLAN=free`:
 
-- `/signal` فقط يبدأ فحصًا يدويًا ويبحث عن فرصة جديدة.
-- Scheduler لا ينشئ أي صفقة جديدة.
-- Scheduler مخصص لمتابعة الصفقات الورقية المفتوحة والتقارير/إشعار إغلاق السوق.
-- `PAPER_MODE=true` إلزامي في النسخة الحالية؛ لا يوجد تنفيذ شراء/بيع حقيقي.
+1. يرفض إنشاء إشارة إذا كان السوق مغلقًا، حتى لا يبني صفقة على سعر إغلاق قديم.
+2. يستخدم endpoint المجاني `/market/volume/` لفرز **حتى 50 سهمًا نشطًا** ببيانات السعر/التغير/الحجم.
+3. يعمل Screening Score على هذه الأسهم.
+4. يطلب `/quote/{symbol}/` فقط لأقوى **5 مرشحين** (قابلة للتعديل).
+5. يطبق شروط الزخم والسيولة والسبريد وحالة TASI.
+6. يبني Entry/SL/TPs بطريقة Quote-only واضحة ومخصصة للـFree، بدون ادعاء استخدام EMA/RSI/MACD/ATR غير المتاحة بدون Historical.
+7. يرسل إشارة ورقية واحدة فقط إذا اجتازت الشروط.
 
-## البوتات الأربعة
+هذا التصميم يوفر الحصة بدل إرسال 50 طلب Quote فرديًا. SAHMK Free لديه 100 طلب/يوم و10 طلبات/دقيقة، لذلك `SAHMK_MIN_REQUEST_INTERVAL=6.5` افتراضيًا.
 
-1. **Signal Bot** — الإشارة الجديدة + أوامر Telegram.
-2. **Profit Bot** — TP1/TP2/TP3 وتحديثات الربح 2/5/10/15/20% مرة واحدة لكل مستوى.
-3. **Loss Bot** — تحذير الاقتراب من SL ثم إشعار SL.
-4. **Report Bot** — التقرير الأسبوعي كصورة إنجليزية.
+## Probability
 
-## Telegram Commands
+لا يتم اختلاق Probability. في بداية المشروع تظهر كـ`UNVALIDATED` مع عدد العينات الفعلي، **ولا تمنع أول Paper Trades**. عندما تتوفر 30 نتيجة مغلقة في نفس bucket تصبح `VALIDATED`، وعندها فقط يطبق `MIN_PROBABILITY`.
+
+## البوتات
+
+- Signal Bot: الأوامر والإشارات.
+- Profit Bot: TP وتحديثات الأرباح.
+- Loss Bot: SL وتحذير الاقتراب منه.
+- Report Bot: التقرير الأسبوعي كصورة.
+
+الأوامر:
 
 `/start` `/help` `/signal` `/market` `/open` `/performance` `/report` `/status` `/health` `/settings` `/risk` `/pause` `/resume`
 
 `/pause` و`/resume` للمشرفين فقط.
 
-## استهلاك SAHMK
+## Telegram على Render
 
-الخطة المجانية ذات الحصة الصغيرة لا تسمح بفحص 270 Quote في كل دورة.
+`TELEGRAM_MODE=auto`:
 
-لذلك الإعداد الافتراضي الآمن هو:
+- على Render يستخدم **Webhook** تلقائيًا عبر `RENDER_EXTERNAL_URL`، وبالتالي لا يعتمد على `getUpdates` polling ولا يفترض وجود polling ثانٍ.
+- محليًا يستخدم Polling.
 
-- `MANUAL_QUOTES_PER_SIGNAL=5`: كل `/signal` يفحص 5 أسهم في الجولة الحالية.
-- المؤشر `scan_cursor` يتحرك في Universe، لذلك استدعاءات `/signal` المتكررة تكمل تغطية السوق بدل إعادة أول الأسهم.
-- `TRADE_MONITOR_QUOTES_PER_CYCLE=1`: المتابعة الدورية تراقب صفقة مفتوحة واحدة في كل دورة.
-- `SCAN_INTERVAL_SECONDS=3600`: دورة المتابعة كل ساعة، وليست دورة اكتشاف.
-- Market Summary وUniverse لهما cache/تحديث دوري.
-- HTTP 429 يحترم `Retry-After` مع backoff وcooldown محدود.
-- لا يوجد endpoint Bulk غير موثق.
+## Render
 
-**مهم:** هذا يعني أن `/signal` الواحد لا يستهلك Request واحدًا بالضرورة. قد يستخدم Market Summary + Quotes + Historical للسهم المرشح. كما أن المتابعة الدورية تستهلك Quote للصفقات المفتوحة. لذلك يجب مراقبة `/health` لمعرفة `SAHMK Requests` و`429`.
+المشروع Web Service + Docker. أمر التشغيل داخل Docker:
 
-إذا كان الهدف فحص **كل 270+ سهمًا في أمر `/signal` واحد**، فالخطة المجانية لن تكون مناسبة ما لم يوفر مزود البيانات Bulk Quotes موثقًا وبحصة كافية.
+```text
+python -m app.main
+```
 
-## Probability
+الأسرار التي تضيفها فقط في Render Environment:
 
-Probability ليست رقم AI. لا يتم إصدار Signal إلا عندما تكون الـProbability **VALIDATED** من نتائج Paper Trading السابقة في نفس bucket وبحد أدنى 30 نتيجة. في البداية قد لا يصدر النظام أي إشارة حتى تتوفر بيانات كافية.
+- `SIGNAL_BOT_TOKEN`
+- `PROFIT_BOT_TOKEN`
+- `LOSS_BOT_TOKEN`
+- `REPORT_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `SAHMK_API_KEY`
 
-## Data Delay
+بقية الإعدادات موجودة في `render.yaml` و`.env.example`.
 
-البيانات من SAHMK تعمل في `data_mode=delayed`. النظام لا يدّعي أنها Live، ويتحقق من عمر `updated_at` عندما يوفره المزود.
+## قيود Render Free المهمة
 
-## التخزين
+Render Free Web Service قد يتوقف بعد 15 دقيقة دون **حركة HTTP واردة**، والتخزين المحلي Ephemeral؛ لذلك:
 
-لا توجد Database. التخزين JSON:
+- أوامر Telegram عبر Webhook يمكنها إيقاظ الخدمة، لكن قد يوجد Cold Start.
+- Scheduler ومتابعة الصفقات ليست مضمونة أثناء نوم الخدمة.
+- ملفات `data/state.json` و`data/trade_history.json` قد تضيع عند restart/redeploy/spin-down.
 
-- `data/state.json`
-- `data/trade_history.json`
-- `data/reports/weekly_report.png`
-
-على Render Free التخزين المحلي ليس ضمانًا دائمًا بعد إعادة إنشاء الخدمة؛ هذا مناسب للتجربة/Paper Trading وليس سجلًا دائمًا موثوقًا.
+إذا أردت متابعة صفقات 24/7 وحفظ سجل Paper Trading بشكل دائم، استخدم خدمة Render مدفوعة مع Persistent Disk أو انقل الحالة إلى datastore دائم.
 
 ## التشغيل المحلي
 
@@ -69,94 +78,26 @@ python -m venv .venv
 # Linux/macOS
 source .venv/bin/activate
 pip install -r requirements.txt
-copy .env.example .env  # Windows
-# أو cp .env.example .env على Linux/macOS
+cp .env.example .env
 python -m app.main --test-telegram
 python -m app.main --test-data
 python -m app.main
 ```
 
-## Render
-
-المشروع يستخدم Docker Web Service لأن FastAPI health endpoint مطلوب، وStart Command داخل Docker هو:
+## Logs المتوقعة على Render
 
 ```text
-python -m app.main
-```
-
-إذا أدخلت Start Command يدويًا في Render استخدم نفس الأمر.
-
-لا ترفع `.env` إلى GitHub. ضع الأسرار في Render Environment Variables:
-
-- `SIGNAL_BOT_TOKEN`
-- `PROFIT_BOT_TOKEN`
-- `LOSS_BOT_TOKEN`
-- `REPORT_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-- `SAHMK_API_KEY`
-
-وبقية المتغيرات موجودة في `.env.example` و`render.yaml`.
-
-## اختبار Telegram
-
-```bash
-python -m app.main --test-telegram
-```
-
-يجب أن يرسل أربعة رسائل اتصال إلى المجموعة.
-
-ثم التشغيل الطبيعي:
-
-```bash
-python -m app.main
-```
-
-في Telegram اختبر بالترتيب:
-
-```text
-/start
-/health
-/status
-/market
-/signal
-/open
-/performance
-/settings
-/risk
-/pause
-/resume
-/report
-```
-
-## Render Logs المتوقعة
-
-```text
-Application startup complete.
-[telegram] command polling started
-[main] service + Telegram command polling started
+[telegram] webhook started: https://...onrender.com/telegram/webhook
+[main] service + Telegram webhook started
 [scheduler] started: monitor/report only; automatic signal discovery is OFF
+INFO: Uvicorn running on http://0.0.0.0:10000
 ```
 
-وعند `/signal`:
+أثناء السوق وعند `/signal` سترى شيئًا مثل:
 
 ```text
-[manual-scan] source=telegram quotes=5 cursor=5/270
+[manual-scan] source=telegram selection=top_volume screened=50/50 universe=270
+[manual-scan] detailed quotes returned 5/5
 ```
 
-وعند عدم وجود فرصة:
-
-```text
-🔎 اكتمل الفحص اليدوي...
-```
-
-وعند وجود صفقة validated:
-
-```text
-[signal] sent 1234
-```
-
-## الأمان
-
-لا تضع Telegram Tokens أو SAHMK API Key في source code أو GitHub.
-
-وبما أن التوكنات التي ظهرت سابقًا في المحادثة ينبغي اعتبارها مكشوفة، يفضّل تدويرها من BotFather قبل الاستخدام النهائي.
+خارج ساعات السوق سيرفض `/signal` إنشاء صفقة بدل استخدام بيانات قديمة.

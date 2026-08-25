@@ -19,20 +19,38 @@ services:
         sync: false
       - key: SAHMK_BASE_URL
         value: https://api.sahmk.sa/api/v1
+      - key: SAHMK_PLAN
+        value: free
+      - key: SAHMK_MIN_REQUEST_INTERVAL
+        value: "6.5"
+      - key: SAHMK_LOCAL_DAILY_LIMIT
+        value: "95"
+      - key: TELEGRAM_MODE
+        value: auto
       - key: PAPER_MODE
         value: "true"
       - key: STATE_DIR
         value: data
       - key: SCAN_INTERVAL_SECONDS
-        value: "3600"
+        value: "900"
       - key: TRADE_MONITOR_QUOTES_PER_CYCLE
         value: "1"
       - key: MANUAL_QUOTES_PER_SIGNAL
+        value: "50"
+      - key: DETAIL_QUOTES_PER_SIGNAL
         value: "5"
       - key: MARKET_CACHE_SECONDS
-        value: "3600"
+        value: "600"
       - key: UNIVERSE_REFRESH_SECONDS
         value: "21600"
+      - key: MARKET_OPEN
+        value: "10:00"
+      - key: MARKET_CLOSE
+        value: "15:00"
+      - key: TIMEZONE
+        value: Asia/Riyadh
+      - key: ALLOW_OFF_HOURS_SCAN
+        value: "false"
       - key: MIN_SCORE
         value: "75"
       - key: MIN_PROBABILITY
