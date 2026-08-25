@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # Scheduler is for monitoring/reporting only. It NEVER creates new signals.
     scan_interval_seconds: int = 3600
     trade_monitor_quotes_per_cycle: int = 1
-    manual_quotes_per_signal: int = 5
+    manual_quotes_per_signal: int = 50
     market_cache_seconds: int = 3600
     universe_refresh_seconds: int = 21600
 
