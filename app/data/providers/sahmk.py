@@ -8,26 +8,11 @@ from .base import DataProvider, Quote
 
 
 class SahmkProvider(DataProvider):
-    """
-    SAHMK data provider.
-
-    Supports:
-    - Single quote: /quote/{symbol}/
-    - Batch quotes: /quotes/ (max 50 symbols/request)
-    - Companies
-    - Market summary
-    - Historical data
-
-    The provider uses delayed market data.
-    """
-
-    BATCH_SIZE = 50
-
     def __init__(self, api_key, base_url):
         self.base_url = base_url.rstrip("/")
 
         self.client = httpx.AsyncClient(
-            timeout=20,
+            timeout=30,
             headers={
                 "X-API-Key": api_key,
                 "Accept": "application/json",
@@ -35,19 +20,15 @@ class SahmkProvider(DataProvider):
             },
         )
 
-        # Retry configuration
         self.max_retries = 2
 
-        # Keep requests separated to reduce rate-limit risk.
+        # لا نرسل الطلبات بسرعة حتى لا نضرب Rate Limit
         self.min_request_interval = 1.0
 
         self._last_request_time = 0.0
         self._request_lock = asyncio.Lock()
-
-        # Global cooldown after 429
         self._cooldown_until = 0.0
 
-        # Statistics
         self._request_count = 0
         self._rate_limit_count = 0
         self._request_errors = 0
@@ -55,61 +36,33 @@ class SahmkProvider(DataProvider):
         # Cache
         self.quote_cache = {}
 
-        # Cache lifetime in seconds
+        # 10 دقائق
         self.quote_cache_ttl = 600
 
+        # SAHMK Bulk Quotes
+        self.bulk_quote_limit = 50
+
     async def close(self):
-        """Close HTTP client."""
         await self.client.aclose()
 
-    # ------------------------------------------------------------------
-    # RATE LIMIT
-    # ------------------------------------------------------------------
-
     async def _rate_limit(self):
-        """
-        Ensure requests are not sent too quickly.
-
-        Also respects the global cooldown created after HTTP 429.
-        """
         async with self._request_lock:
             now = time.monotonic()
 
-            # Respect cooldown
             if now < self._cooldown_until:
-                wait_time = self._cooldown_until - now
-
-                print(
-                    f"[SAHMK] cooldown active: "
-                    f"waiting {wait_time:.1f}s"
-                )
-
-                await asyncio.sleep(wait_time)
+                await asyncio.sleep(self._cooldown_until - now)
                 now = time.monotonic()
 
-            # Minimum interval between requests
             elapsed = now - self._last_request_time
 
             if elapsed < self.min_request_interval:
-                wait_time = self.min_request_interval - elapsed
-                await asyncio.sleep(wait_time)
+                await asyncio.sleep(
+                    self.min_request_interval - elapsed
+                )
 
             self._last_request_time = time.monotonic()
 
-    # ------------------------------------------------------------------
-    # HTTP GET
-    # ------------------------------------------------------------------
-
     async def _get(self, path, params=None):
-        """
-        Perform GET request with:
-        - rate limiting
-        - retry
-        - exponential backoff
-        - 429 handling
-        - temporary server error handling
-        """
-
         for attempt in range(self.max_retries + 1):
 
             await self._rate_limit()
@@ -128,34 +81,25 @@ class SahmkProvider(DataProvider):
 
                 self._request_errors += 1
 
-                print(
-                    f"[SAHMK] network error "
-                    f"path={path} "
-                    f"attempt={attempt + 1}: {exc}"
-                )
-
                 if attempt < self.max_retries:
-                    wait = min(2 ** attempt, 10)
-
-                    await asyncio.sleep(wait)
-
+                    await asyncio.sleep(
+                        min(2 ** attempt, 10)
+                    )
                     continue
 
                 raise exc
 
-            # ----------------------------------------------------------
-            # RATE LIMIT
-            # ----------------------------------------------------------
-
+            # Rate limit
             if response.status_code == 429:
 
                 self._rate_limit_count += 1
 
-                retry_after = response.headers.get("Retry-After")
+                retry_after = response.headers.get(
+                    "Retry-After"
+                )
 
                 try:
                     wait = float(retry_after)
-
                 except (TypeError, ValueError):
                     wait = min(
                         2 ** (attempt + 1),
@@ -178,9 +122,7 @@ class SahmkProvider(DataProvider):
                 )
 
                 if attempt < self.max_retries:
-
                     await asyncio.sleep(wait)
-
                     continue
 
                 raise httpx.HTTPStatusError(
@@ -189,10 +131,7 @@ class SahmkProvider(DataProvider):
                     response=response,
                 )
 
-            # ----------------------------------------------------------
-            # TEMPORARY SERVER ERRORS
-            # ----------------------------------------------------------
-
+            # Server errors
             if response.status_code in (
                 500,
                 502,
@@ -200,28 +139,14 @@ class SahmkProvider(DataProvider):
                 504,
             ):
 
-                self._request_errors += 1
-
                 if attempt < self.max_retries:
+                    self._request_errors += 1
 
-                    wait = min(
-                        2 ** attempt,
-                        15,
+                    await asyncio.sleep(
+                        min(2 ** attempt, 15)
                     )
-
-                    print(
-                        f"[SAHMK] server error "
-                        f"{response.status_code} "
-                        f"{path}; retry in {wait}s"
-                    )
-
-                    await asyncio.sleep(wait)
 
                     continue
-
-            # ----------------------------------------------------------
-            # NORMAL RESPONSE
-            # ----------------------------------------------------------
 
             response.raise_for_status()
 
@@ -233,33 +158,16 @@ class SahmkProvider(DataProvider):
             "SAHMK request failed"
         )
 
-    # ------------------------------------------------------------------
-    # STATS
-    # ------------------------------------------------------------------
-
     def stats(self):
-        """
-        Return provider statistics.
-        """
         return {
             "requests": self._request_count,
             "rate_limits": self._rate_limit_count,
             "errors": self._request_errors,
         }
 
-    # ------------------------------------------------------------------
-    # COMPANIES
-    # ------------------------------------------------------------------
-
     async def companies(self, market="TASI"):
-        """
-        Load all companies from SAHMK.
-
-        Uses pagination with 100 companies per request.
-        """
 
         out = []
-
         offset = 0
 
         while True:
@@ -291,251 +199,12 @@ class SahmkProvider(DataProvider):
 
             offset += 100
 
-            # Safety limit
             if offset > 2000:
                 break
 
-        print(
-            f"[SAHMK] companies loaded: {len(out)}"
-        )
-
         return out
 
-    # ------------------------------------------------------------------
-    # SINGLE QUOTE
-    # ------------------------------------------------------------------
-
-    async def quote(self, symbol):
-        """
-        Get a single stock quote.
-
-        Kept for cases where one specific symbol is needed.
-        For scanning the entire market, use quotes().
-        """
-
-        symbol = str(symbol).strip()
-
-        if not symbol:
-            return None
-
-        # --------------------------------------------------------------
-        # CACHE
-        # --------------------------------------------------------------
-
-        cached = self.quote_cache.get(symbol)
-
-        if cached:
-
-            cached_time, cached_quote = cached
-
-            if (
-                time.monotonic() - cached_time
-                < self.quote_cache_ttl
-            ):
-                return cached_quote
-
-        # --------------------------------------------------------------
-        # API
-        # --------------------------------------------------------------
-
-        data = await self._get(
-            f"/quote/{symbol}/",
-            {
-                "data_mode": "delayed",
-            },
-        )
-
-        quote = self._parse_quote(
-            data,
-            fallback_symbol=symbol,
-        )
-
-        if quote is not None:
-
-            self.quote_cache[symbol] = (
-                time.monotonic(),
-                quote,
-            )
-
-        return quote
-
-    # ------------------------------------------------------------------
-    # BATCH QUOTES
-    # ------------------------------------------------------------------
-
-    async def quotes(
-        self,
-        symbols,
-        data_mode="delayed",
-    ):
-        """
-        Get multiple stock quotes using SAHMK batch endpoint.
-
-        SAHMK batch limit:
-            Maximum 50 symbols per request.
-
-        Example:
-            270 symbols
-            -> 50
-            -> 50
-            -> 50
-            -> 50
-            -> 50
-            -> 20
-
-        Total:
-            6 API requests.
-        """
-
-        # --------------------------------------------------------------
-        # CLEAN SYMBOLS
-        # --------------------------------------------------------------
-
-        cleaned_symbols = []
-
-        for symbol in symbols:
-
-            symbol = str(symbol).strip()
-
-            if symbol:
-                cleaned_symbols.append(symbol)
-
-        # Remove duplicates while preserving order
-        cleaned_symbols = list(
-            dict.fromkeys(cleaned_symbols)
-        )
-
-        if not cleaned_symbols:
-
-            print(
-                "[SAHMK] batch quotes: "
-                "no symbols"
-            )
-
-            return []
-
-        total = len(cleaned_symbols)
-
-        results = []
-
-        # --------------------------------------------------------------
-        # SPLIT INTO BATCHES OF 50
-        # --------------------------------------------------------------
-
-        for start in range(
-            0,
-            total,
-            self.BATCH_SIZE,
-        ):
-
-            batch = cleaned_symbols[
-                start:start + self.BATCH_SIZE
-            ]
-
-            batch_start = start + 1
-            batch_end = start + len(batch)
-
-            print(
-                f"[SAHMK] batch quotes "
-                f"{batch_start}-{batch_end}/{total}"
-            )
-
-            try:
-
-                payload = await self._get(
-                    "/quotes/",
-                    {
-                        "symbols": ",".join(batch),
-                        "data_mode": data_mode,
-                    },
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"[SAHMK] batch failed "
-                    f"{batch_start}-{batch_end}/{total}: "
-                    f"{exc}"
-                )
-
-                # Do not switch to 50 individual requests.
-                # That would defeat the purpose of batch scanning.
-                continue
-
-            # ----------------------------------------------------------
-            # PARSE RESPONSE
-            # ----------------------------------------------------------
-
-            quotes_data = payload.get(
-                "quotes",
-                payload.get(
-                    "results",
-                    [],
-                ),
-            )
-
-            if not isinstance(
-                quotes_data,
-                list,
-            ):
-
-                print(
-                    "[SAHMK] invalid batch response: "
-                    "quotes/results is not a list"
-                )
-
-                continue
-
-            for data in quotes_data:
-
-                try:
-
-                    quote = self._parse_quote(
-                        data,
-                        fallback_symbol="",
-                    )
-
-                    if quote is None:
-                        continue
-
-                    self.quote_cache[
-                        quote.symbol
-                    ] = (
-                        time.monotonic(),
-                        quote,
-                    )
-
-                    results.append(quote)
-
-                except (
-                    TypeError,
-                    ValueError,
-                ) as exc:
-
-                    print(
-                        "[SAHMK] invalid quote data: "
-                        f"{exc}"
-                    )
-
-        print(
-            f"[SAHMK] batch complete: "
-            f"{len(results)}/{total} quotes"
-        )
-
-        return results
-
-    # ------------------------------------------------------------------
-    # QUOTE PARSER
-    # ------------------------------------------------------------------
-
-    def _parse_quote(
-        self,
-        data,
-        fallback_symbol="",
-    ):
-        """
-        Convert SAHMK response into Quote object.
-        """
+    def _parse_quote(self, data, fallback_symbol=None):
 
         if not isinstance(data, dict):
             return None
@@ -543,31 +212,18 @@ class SahmkProvider(DataProvider):
         symbol = str(
             data.get(
                 "symbol",
-                fallback_symbol,
+                fallback_symbol or "",
             )
-            or ""
-        ).strip()
-
-        if not symbol:
-            return None
-
-        # --------------------------------------------------------------
-        # UPDATED AT
-        # --------------------------------------------------------------
+        )
 
         updated_at = None
 
-        raw_updated_at = data.get(
-            "updated_at"
-        )
-
-        if raw_updated_at:
+        if data.get("updated_at"):
 
             try:
-
                 updated_at = datetime.fromisoformat(
                     str(
-                        raw_updated_at
+                        data["updated_at"]
                     ).replace(
                         "Z",
                         "+00:00",
@@ -578,77 +234,78 @@ class SahmkProvider(DataProvider):
                 ValueError,
                 TypeError,
             ):
+                pass
 
-                updated_at = None
-
-        # --------------------------------------------------------------
-        # NUMERIC VALUES
-        # --------------------------------------------------------------
-
-        def to_float(value, default=0.0):
-
-            if value is None:
-                return default
-
-            try:
-                return float(value)
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-                return default
-
-        price = to_float(
-            data.get("price")
-        )
-
-        change_percent = to_float(
-            data.get("change_percent")
-        )
-
-        volume = to_float(
-            data.get("volume")
-        )
-
-        value = to_float(
-            data.get(
-                "value",
-                data.get(
-                    "net_liquidity",
-                    0,
-                ),
+        try:
+            price = float(
+                data.get("price") or 0
             )
-        )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            price = 0.0
 
-        bid = (
-            to_float(data.get("bid"))
-            if data.get("bid") is not None
-            else None
-        )
+        try:
+            change_percent = float(
+                data.get(
+                    "change_percent"
+                ) or 0
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            change_percent = 0.0
 
-        ask = (
-            to_float(data.get("ask"))
-            if data.get("ask") is not None
-            else None
-        )
+        try:
+            volume = float(
+                data.get("volume") or 0
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            volume = 0.0
 
-        # --------------------------------------------------------------
-        # QUOTE OBJECT
-        # --------------------------------------------------------------
+        try:
+            value = float(
+                data.get("value") or 0
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            value = 0.0
+
+        try:
+            bid = (
+                float(data["bid"])
+                if data.get("bid") is not None
+                else None
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            bid = None
+
+        try:
+            ask = (
+                float(data["ask"])
+                if data.get("ask") is not None
+                else None
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            ask = None
 
         return Quote(
             symbol,
-            data.get(
-                "name",
-                "",
-            )
-            or "",
-            data.get(
-                "name_en",
-                "",
-            )
-            or "",
+            data.get("name", "") or "",
+            data.get("name_en", "") or "",
             price,
             change_percent,
             volume,
@@ -665,9 +322,222 @@ class SahmkProvider(DataProvider):
             data,
         )
 
-    # ------------------------------------------------------------------
-    # MARKET SUMMARY
-    # ------------------------------------------------------------------
+    async def quote(self, symbol):
+
+        symbol = str(symbol)
+
+        cached = self.quote_cache.get(
+            symbol
+        )
+
+        if (
+            cached
+            and time.monotonic()
+            - cached[0]
+            < self.quote_cache_ttl
+        ):
+            return cached[1]
+
+        data = await self._get(
+            f"/quote/{symbol}/",
+            {
+                "data_mode": "delayed"
+            },
+        )
+
+        quote = self._parse_quote(
+            data,
+            symbol,
+        )
+
+        if quote is None:
+            raise ValueError(
+                f"Invalid quote response for {symbol}"
+            )
+
+        self.quote_cache[symbol] = (
+            time.monotonic(),
+            quote,
+        )
+
+        return quote
+
+    async def quotes(self, symbols):
+
+        """
+        جلب أسعار عدة أسهم باستخدام Bulk Quotes.
+
+        SAHMK يسمح حتى 50 رمزًا في الطلب الواحد
+        في endpoint /quotes/.
+
+        مثال:
+
+        symbols = [
+            "1010",
+            "1020",
+            "1030",
+            ...
+        ]
+
+        سيتم تقسيمها تلقائيًا إلى مجموعات
+        بحد أقصى 50 رمزًا.
+        """
+
+        symbols = [
+            str(symbol).strip()
+            for symbol in symbols
+            if symbol is not None
+            and str(symbol).strip()
+        ]
+
+        # إزالة التكرار مع الحفاظ على الترتيب
+        symbols = list(
+            dict.fromkeys(symbols)
+        )
+
+        if not symbols:
+            return {}
+
+        results = {}
+
+        # استخدم الـ cache أولًا
+        remaining = []
+
+        now = time.monotonic()
+
+        for symbol in symbols:
+
+            cached = self.quote_cache.get(
+                symbol
+            )
+
+            if (
+                cached
+                and now - cached[0]
+                < self.quote_cache_ttl
+            ):
+
+                results[symbol] = cached[1]
+
+            else:
+                remaining.append(symbol)
+
+        if not remaining:
+            return results
+
+        # تقسيم إلى مجموعات 50
+        chunks = [
+            remaining[i:i + self.bulk_quote_limit]
+            for i in range(
+                0,
+                len(remaining),
+                self.bulk_quote_limit,
+            )
+        ]
+
+        print(
+            f"[SAHMK] bulk quotes: "
+            f"{len(remaining)} symbols "
+            f"-> {len(chunks)} requests"
+        )
+
+        for index, chunk in enumerate(
+            chunks,
+            start=1,
+        ):
+
+            print(
+                f"[SAHMK] bulk request "
+                f"{index}/{len(chunks)}: "
+                f"{len(chunk)} symbols"
+            )
+
+            try:
+
+                payload = await self._get(
+                    "/quotes/",
+                    {
+                        "symbols": ",".join(
+                            chunk
+                        ),
+                        "data_mode": "delayed",
+                    },
+                )
+
+                # بعض APIs ترجع:
+                # {"results": [...]}
+                # وبعضها:
+                # {"data": [...]}
+                # وبعضها قائمة مباشرة.
+
+                if isinstance(
+                    payload,
+                    list,
+                ):
+                    rows = payload
+
+                elif isinstance(
+                    payload,
+                    dict,
+                ):
+
+                    rows = payload.get(
+                        "results",
+                        payload.get(
+                            "data",
+                            payload.get(
+                                "quotes",
+                                [],
+                            ),
+                        ),
+                    )
+
+                else:
+                    rows = []
+
+                if not isinstance(
+                    rows,
+                    list,
+                ):
+                    rows = []
+
+                for row in rows:
+
+                    quote = self._parse_quote(
+                        row
+                    )
+
+                    if quote is None:
+                        continue
+
+                    symbol = quote.symbol
+
+                    results[symbol] = quote
+
+                    self.quote_cache[
+                        symbol
+                    ] = (
+                        time.monotonic(),
+                        quote,
+                    )
+
+            except Exception as exc:
+
+                print(
+                    f"[SAHMK] bulk request "
+                    f"{index} failed: {exc}"
+                )
+
+                # لا نوقف الفحص بالكامل
+                # بسبب فشل مجموعة واحدة.
+                continue
+
+        print(
+            f"[SAHMK] bulk quotes complete: "
+            f"{len(results)}/{len(symbols)}"
+        )
+
+        return results
 
     async def market_summary(self):
 
@@ -675,20 +545,11 @@ class SahmkProvider(DataProvider):
             "/market/summary/"
         )
 
-    # ------------------------------------------------------------------
-    # HISTORICAL
-    # ------------------------------------------------------------------
-
     async def historical(
         self,
         symbol,
         days=250,
     ):
-        """
-        Get historical daily data.
-        """
-
-        symbol = str(symbol).strip()
 
         end = date.today()
 
